@@ -1,0 +1,113 @@
+---
+title: "Practical Machine Learning Course Project"
+output: html_document
+---
+
+## Introduction
+
+In this project we will use machine learning to determine the type of activity being done, given a specific set of accelerometer measurements. We will use the data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants, who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. 
+
+We will train a Random Forest machine learning algorithm (with cross-validation) using a subset of this data, and then use it on an independent (testing) subset of data to estimate the efficiency of the model through its out-of-sample error in predicting a specific class of activity.
+
+
+## Loading and cleaning the data
+
+We start by loading all the necessary packages and the training and (final) test data (assuming the data has been downloaded and is in the working directory)
+```{r}
+suppressMessages(library(caret)) 
+suppressMessages(library(randomForest))
+dataRaw <- read.csv("pml-training.csv", comment.char = "")
+finalTest <- read.csv("pml-testing.csv", comment.char = "")
+```
+As we can see, this data has a lot of columns, and not all are important in predicting the class:
+```{r}
+dim(dataRaw)
+```
+First, we'll get rid of the first 7 columns as they don't represent accelerometer readings:
+```{r}
+head(dataRaw)[1:7]
+dataClean <- dataRaw[,-c(1:7)]
+```
+This is a rather noisy data set, there are many columns that contain NA's, or simply contain nothing at all, for example:
+```{r}
+head(dataClean$var_yaw_forearm)
+head(dataClean$amplitude_yaw_forearm)
+```
+For that purpose define a function which will loop over every element in a (column) vector and check if it is both numeric and not NA, sum those up and check that the fraction of those elements is larger than 0.5:
+```{r}
+cleanFun <- function(x){
+   t1 <- sapply(x,FUN=is.numeric)
+   t2 <- !sapply(x,FUN=is.na)
+   sum(t1&t2)/dim(dataClean)[1]>0.5
+}
+```
+Now we can use this to subselect the columns in the training data set we want to use:
+```{r}
+selCols <- unlist(lapply(dataClean,cleanFun),use.names=FALSE)
+selCols[length(selCols)] <- TRUE
+dataClean <- dataClean[,selCols]
+```
+We included back the last column in the dataset, as this is the `classe` variable, a character vector describing the type of activity, and this is the variable we want to predict.
+```{r}
+str(dataClean[,dim(dataClean)[2]])
+```
+Finally, make sure that there are no NA's in the rest of the dataset:
+```{r}
+sum(complete.cases(dataClean)) / dim(dataClean)[1]
+dim(dataClean)
+```
+So now we have a nice and clean training dataset in which instead of 153 columns, we only have 52 possible predictors. We have to do exactly the same transformation on the test data:
+```{r}
+cleanTest <- finalTest[,-c(1:7)]
+cleanTest <- cleanTest[,selCols]
+dim(cleanTest)
+```
+
+
+## Training the model
+
+As we normally do, we will subdivide the training set into a 70% training set, and a 30% testing (really a validation) set:
+```{r}
+set.seed(100)
+inTrain <- createDataPartition(y=dataClean$classe,p=0.7, list=FALSE)
+training <- dataClean[inTrain,]
+testing <- dataClean[-inTrain,]
+```
+
+Since this is a classification problem, the Random Forest algorithm is generally quite accurate at it, and this can be implemented in R via `caret`'s `train` function by specifying `method = "rf"`. We will predict the `classe` factor variable, and we'll use all the remaining variables in the model as the predictors. Since this is a lot of predictors, we'll choose the number of trees to be 200 (less than `train`'s default 500). Also, since the random forest algorithms are prone to overfitting, in order to avoid that, we need to use cross-validation (we'll use 5-fold cross-validation), which we can simply implement via the `trainControl` option:
+```{r}
+rfFit <- train(classe ~ ., data = training, 
+               method = "rf", ntree = 200,
+               trControl = trainControl(method="cv", 5))
+rfFit
+```
+As we see, we got a rather high accuracy of about 99%; hence, the in-sample misclassification error is only about 1%.
+
+
+## Evaluating out-of-sample error
+
+To evaluate the out-of-sample error, we'll now apply our model to the independent test (validation) set we created earlier and look at the confusion matrix to compare the predictions to the true values:
+```{r}
+rfPredict <- predict(rfFit, testing)
+confusionMatrix(testing$classe, rfPredict)
+```
+As we can see, the out-of-sample performance of this model is still great, yielding accuracy of about 99.4%, that is to say, only a 0.6% out-of-sample error.
+
+
+## Apply the model to the test data
+
+Finally, we apply this to the test data for the purposes of uploading it to the Coursera website:
+```{r}
+answers <- predict(rfFit, cleanTest)
+```
+We also use the code provided to export to the text files:
+```{r}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(answers)
+```
